@@ -80,8 +80,17 @@ export function selectByStatus(status) {
 
 export function findFirstByStatus(status) {
   const db = connect()
-  const row = db.prepare(`SELECT * FROM video WHERE status = ? LIMIT 1`).get(status, { silent: true })
-  return row
+  const withCode = db
+    .prepare(
+      `SELECT * FROM video WHERE status = ? AND code IS NOT NULL AND code != '' ORDER BY id ASC LIMIT 1`
+    )
+    .get(status, { silent: true })
+  if (withCode) {
+    return withCode
+  }
+  return db
+    .prepare(`SELECT * FROM video WHERE status = ? ORDER BY id ASC LIMIT 1`)
+    .get(status, { silent: true })
 }
 
 export function updateStatus(id, status, message, progress = 0, file_path = '') {

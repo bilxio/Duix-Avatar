@@ -10,6 +10,28 @@ import dayjs from 'dayjs'
 
 const MODEL_NAME = 'voice'
 
+function formatTrainError(msg) {
+  if (!msg) return '语音模型训练失败'
+  if (msg.includes('NoneType') && msg.includes('send')) {
+    return (
+      'ASR 语音识别服务未就绪（duix-avatar-asr 未启动或仍在加载）。' +
+      '请在 GPU 服务器执行 docker ps 确认 asr/tts 均为 Running，' +
+      '启动后等待 2～5 分钟再提交定制；若刚做过视频合成，请确认代理已执行 docker start 恢复容器。'
+    )
+  }
+  if (/connection refused/i.test(msg)) {
+    return '无法连接 ASR 服务，请检查 duix-avatar-asr 容器是否在运行（端口 10095）。'
+  }
+  if (/asr failed/i.test(msg)) {
+    return (
+      '语音识别失败（ASR 未返回有效文本）。常见原因：① 模特视频里人声不清晰或太短（建议 10 秒以上连续中文说话）；' +
+      '② 刚合成完视频后 ASR 尚未完全加载——等 1～2 分钟再提交，或看 proxy 日志是否出现「ASR 模型加载完成」；' +
+      '③ 8GB 显存机器需保持 gen-video 停止后再训练。'
+    )
+  }
+  return msg
+}
+
 export function getAllTimbre() {
   return selectAll()
 }
@@ -23,7 +45,7 @@ export async function train(path, lang = 'zh') {
   })
   log.debug('~ train ~ res:', res)
   if (res.code !== 0) {
-    return false
+    throw new Error(formatTrainError(res.msg))
   } else {
     const { asr_format_audio_url, reference_audio_text } = res
     return insert({ origin_audio_path: path, lang, asr_format_audio_url, reference_audio_text })

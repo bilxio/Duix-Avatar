@@ -1,6 +1,36 @@
 import ffmpeg from 'fluent-ffmpeg'
 import path from 'path'
+import fs from 'fs'
+import { execSync } from 'child_process'
 import log from '../logger.js'
+
+function resolveBinary(name, pathMap) {
+  const key = `${process.env.NODE_ENV}-${process.platform}`
+  const bundled = pathMap[key]
+  if (bundled && fs.existsSync(bundled)) {
+    return bundled
+  }
+  if (process.platform === 'darwin') {
+    const candidates = [
+      `/opt/homebrew/bin/${name}`,
+      `/usr/local/bin/${name}`
+    ]
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        return candidate
+      }
+    }
+    try {
+      const found = execSync(`which ${name}`, { encoding: 'utf8' }).trim()
+      if (found && fs.existsSync(found)) {
+        return found
+      }
+    } catch {
+      // PATH 中未找到
+    }
+  }
+  return bundled
+}
 
 function initFFmpeg() {
   const ffmpegPath = {
@@ -29,10 +59,13 @@ function initFFmpeg() {
     process.env.NODE_ENV = 'production'
   }
 
-  const ffmpegPathValue = ffmpegPath[`${process.env.NODE_ENV}-${process.platform}`]
-  log.debug('ENV:', `${process.env.NODE_ENV}-${process.platform}`)
+  const envKey = `${process.env.NODE_ENV}-${process.platform}`
+  const ffmpegPathValue = resolveBinary('ffmpeg', ffmpegPath)
+  log.debug('ENV:', envKey)
   log.info('FFmpeg path:', ffmpegPathValue)
-  ffmpeg.setFfmpegPath(ffmpegPathValue)
+  if (ffmpegPathValue) {
+    ffmpeg.setFfmpegPath(ffmpegPathValue)
+  }
 
   const ffprobePath = {
     'development-win32': path.join(__dirname, '../../resources/ffmpeg/win-amd64/bin/ffprobe.exe'),
@@ -56,9 +89,13 @@ function initFFmpeg() {
     )
   }
 
-  const ffprobePathValue = ffprobePath[`${process.env.NODE_ENV}-${process.platform}`]
+  const ffprobePathValue = resolveBinary('ffprobe', ffprobePath)
   log.info('FFprobe path:', ffprobePathValue)
-  ffmpeg.setFfprobePath(ffprobePathValue)
+  if (ffprobePathValue) {
+    ffmpeg.setFfprobePath(ffprobePathValue)
+  } else {
+    log.warn('FFprobe not configured for', envKey, '- install ffmpeg or add resources/ffmpeg/darwin')
+  }
 }
 
 initFFmpeg()
@@ -112,14 +149,23 @@ export function getVideoDuration(videoPath) {
   return new Promise((resolve, reject) => {
     ffmpeg(videoPath).ffprobe((err, data) => {
       if (err) {
-        log.error("🚀 ~ ffmpeg ~ err:", err)
+        log.error('~ getVideoDuration ~', err)
         reject(err)
-      } else if (data && data.streams && data.streams.length > 0) {
-        resolve(data.streams[0].duration) // 单位秒
-      } else {
-        log.error('No streams found')
-        reject(new Error('No streams found'))
+        return
       }
+      const formatDur = parseFloat(data?.format?.duration)
+      if (formatDur > 0) {
+        resolve(formatDur)
+        return
+      }
+      const videoStream = data?.streams?.find((s) => s.codec_type === 'video')
+      const streamDur = parseFloat(videoStream?.duration ?? data?.streams?.[0]?.duration)
+      if (streamDur > 0) {
+        resolve(streamDur)
+        return
+      }
+      log.error('~ getVideoDuration ~ no duration:', videoPath)
+      reject(new Error('No duration found'))
     })
   })
 }

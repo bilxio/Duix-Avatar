@@ -5,7 +5,13 @@ export function insert({ modelName, videoPath, audioPath, voiceId }) {
   const stmt = db.prepare(
     'INSERT INTO f2f_model (name, video_path, audio_path, voice_id, created_at) VALUES (?, ?, ?, ?, ?)'
   )
-  const info = stmt.run(modelName, videoPath, audioPath, voiceId, Date.now())
+  const info = stmt.run(
+    modelName,
+    videoPath,
+    audioPath,
+    voiceId == null || voiceId === false ? null : voiceId,
+    Date.now()
+  )
   return info.lastInsertRowid
 }
 

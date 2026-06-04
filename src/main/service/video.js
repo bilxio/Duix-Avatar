@@ -26,21 +26,29 @@ const MODEL_NAME = 'video'
  * @param {number} pageSize
  * @returns
  */
-function page({ page, pageSize, name = '' }) {
+async function page({ page, pageSize, name = '' }) {
   // 查询的有waiting状态的视频
   const waitingVideos = selectByStatus('waiting').map((v) => v.id)
   const total = count(name)
-  const list = selectPage({ page, pageSize, name }).map((video) => {
-    video = {
-      ...video,
-      file_path: video.file_path ? path.join(assetPath.model, video.file_path) : video.file_path
-    }
+  const rows = selectPage({ page, pageSize, name })
+  const list = await Promise.all(
+    rows.map(async (video) => {
+      if (video.status === 'success') {
+        video = await ensureSuccessVideoMeta(video)
+      } else {
+        const rel = toRelativeVideoPath(video.file_path, resolveTaskCode(video))
+        video = {
+          ...video,
+          file_path: rel ? path.join(assetPath.model, rel) : video.file_path
+        }
+      }
 
-    if(video.status === 'waiting'){
-      video.progress = `${waitingVideos.indexOf(video.id) + 1} / ${waitingVideos.length}`
-    }
-    return video
-  })
+      if (video.status === 'waiting') {
+        video.progress = `${waitingVideos.indexOf(video.id) + 1} / ${waitingVideos.length}`
+      }
+      return video
+    })
+  )
 
   return {
     total,
@@ -48,11 +56,16 @@ function page({ page, pageSize, name = '' }) {
   }
 }
 
-function findVideo(videoId) {
-  const video = selectVideoByID(videoId)
+async function findVideo(videoId) {
+  let video = selectVideoByID(videoId)
+  if (video?.status === 'success') {
+    video = await ensureSuccessVideoMeta(video)
+    return video
+  }
+  const rel = toRelativeVideoPath(video.file_path, resolveTaskCode(video))
   return {
     ...video,
-    file_path: video.file_path ? path.join(assetPath.model, video.file_path) : video.file_path
+    file_path: rel ? path.join(assetPath.model, rel) : video.file_path
   }
 }
 
@@ -117,14 +130,9 @@ export async function synthesisVideo(videoId) {
       log.debug('~ makeVideo ~ audioPath:', audioPath)
     }
 
-    // 调用视频生成接口生成视频
-    let result, param
-    if (process.env.NODE_ENV === 'development') {
-      // 写死调试
-      ({ result, param } = await makeVideoByF2F('test.wav', 'test.mp4'))
-    } else {
-      ({ result, param } = await makeVideoByF2F(audioPath, model.video_path))
-    }
+    // 调用视频生成接口（audio/video 为 face2face/temp 下的文件名，由 proxy 同步到 GPU 机）
+    log.info('提交合成:', { audioPath, videoPath: model.video_path })
+    const { result, param } = await makeVideoByF2F(audioPath, model.video_path)
 
     log.debug('~ makeVideo ~ result, param:', result, param)
 
@@ -159,57 +167,219 @@ export async function synthesisVideo(videoId) {
   return videoId
 }
 
-export async function loopPending() {
-  const video = findFirstByStatus('pending')
-  if (!video) {
-    synthesisNext()
+/** 从 video 记录或 param JSON 解析 face2face 任务 code */
+function resolveTaskCode(video) {
+  if (video?.code) {
+    return video.code
+  }
+  if (!video?.param) {
+    return null
+  }
+  try {
+    const param = typeof video.param === 'string' ? JSON.parse(video.param) : video.param
+    return param?.code || null
+  } catch {
+    return null
+  }
+}
 
+/** 将 DB / API 中的路径统一为 temp 目录下的相对文件名 */
+function toRelativeVideoPath(filePath, taskCode) {
+  if (!filePath) {
+    return taskCode ? `${taskCode}-r.mp4` : null
+  }
+  let rel = String(filePath).replace(/\\/g, '/')
+  if (rel.startsWith('/code/data/')) {
+    rel = rel.slice('/code/data/'.length)
+  }
+  if (path.isAbsolute(rel)) {
+    rel = path.basename(rel)
+  }
+  rel = rel.replace(/^\/+/, '')
+  if (!rel || !/\.(mp4|avi|mov)$/i.test(rel)) {
+    return taskCode ? `${taskCode}-r.mp4` : rel
+  }
+  return rel
+}
+
+/** 将服务端 result 路径转为本地 temp 下的相对路径 */
+function normalizeResultRelPath(result, taskCode) {
+  return toRelativeVideoPath(result, taskCode)
+}
+
+/** 解析 success 视频在本地 temp 下的绝对路径（兼容错误的前导 /） */
+function resolveLocalVideoFullPath(video) {
+  const code = resolveTaskCode(video)
+  const candidates = [
+    toRelativeVideoPath(video?.file_path, code),
+    code ? `${code}-r.mp4` : null,
+    code ? `${code}-r.avi` : null
+  ].filter(Boolean)
+  for (const rel of [...new Set(candidates)]) {
+    const full = path.join(assetPath.model, rel)
+    if (fs.existsSync(full)) {
+      return { full, rel }
+    }
+  }
+  const rel = toRelativeVideoPath(video?.file_path, code)
+  return rel ? { full: path.join(assetPath.model, rel), rel } : { full: null, rel: null }
+}
+
+/** 列表/详情展示前修复错误的 file_path、duration */
+async function ensureSuccessVideoMeta(video) {
+  if (video.status !== 'success') {
+    return video
+  }
+  const { full, rel } = resolveLocalVideoFullPath(video)
+  if (!full || !rel || !fs.existsSync(full)) {
+    return { ...video, file_path: full || video.file_path }
+  }
+  let duration = Number(video.duration) || 0
+  if (!duration) {
+    try {
+      duration = await getVideoDuration(full)
+    } catch (err) {
+      log.warn('~ ensureSuccessVideoMeta ~ getVideoDuration:', err.message)
+    }
+  }
+  const storedRel = toRelativeVideoPath(video.file_path, resolveTaskCode(video))
+  if (storedRel !== rel || (duration && !Number(video.duration))) {
+    update({ id: video.id, file_path: rel, duration })
+  }
+  return { ...video, file_path: full, duration }
+}
+
+/** proxy 下载或 gen-video 产物的常见文件名 */
+function localResultCandidates(video, remoteResult) {
+  const code = resolveTaskCode(video)
+  if (!code) {
+    return []
+  }
+  const list = [
+    `${code}-r.mp4`,
+    `${code}-r.avi`,
+    path.join('temp', code, 'result.avi'),
+    path.join(code, 'result.avi')
+  ]
+  if (remoteResult) {
+    const rel = normalizeResultRelPath(remoteResult, code)
+    if (rel) {
+      list.unshift(rel)
+    }
+  }
+  return [...new Set(list)]
+}
+
+/** 若结果文件已在本地 temp，标记为 success（Mac+proxy 场景常见） */
+async function tryMarkVideoSuccess(video, message = '视频处理完成', remoteResult) {
+  for (const rel of localResultCandidates(video, remoteResult)) {
+    const full = path.join(assetPath.model, rel)
+    if (!fs.existsSync(full)) {
+      continue
+    }
+    let duration = 0
+    try {
+      duration = await getVideoDuration(full)
+    } catch (err) {
+      log.warn('~ tryMarkVideoSuccess ~ getVideoDuration:', err.message)
+    }
+    update({
+      id: video.id,
+      status: 'success',
+      message,
+      progress: 100,
+      file_path: rel,
+      duration
+    })
+    log.info('合成完成(本地结果):', rel)
+    return true
+  }
+  return false
+}
+
+export async function loopPending() {
+  let finishedPending = false
+  try {
+    const video = findFirstByStatus('pending')
+    if (!video) {
+      synthesisNext()
+      return
+    }
+
+    const taskCode = resolveTaskCode(video)
+    if (!taskCode) {
+      log.warn('~ loopPending ~ pending 任务尚无 code，稍后重试 id=', video.id)
+      return
+    }
+    const task = { ...video, code: taskCode }
+
+    if (await tryMarkVideoSuccess(task)) {
+      finishedPending = true
+      return
+    }
+
+    const statusRes = await getVideoStatus(taskCode)
+
+    if ([9999, 10002, 10003].includes(statusRes.code)) {
+      updateStatus(video.id, 'failed', statusRes.msg)
+      finishedPending = true
+    } else if (statusRes.code === 10004) {
+      if (await tryMarkVideoSuccess(task, '视频处理完成')) {
+        finishedPending = true
+      } else {
+        log.warn('~ loopPending ~ 任务不存在且本地无结果文件:', taskCode)
+      }
+    } else if (statusRes.code === 10000) {
+      const data = statusRes.data || {}
+      if (data.status === 1) {
+        if (data.progress >= 100 && data.result) {
+          if (await tryMarkVideoSuccess(task, data.msg || '视频处理完成', data.result)) {
+            finishedPending = true
+            return
+          }
+        }
+        updateStatus(video.id, 'pending', data.msg, data.progress ?? 0)
+      } else if (data.status === 2) {
+        if (await tryMarkVideoSuccess(task, data.msg || '视频处理完成', data.result)) {
+          finishedPending = true
+          return
+        }
+        const rel = normalizeResultRelPath(data.result, taskCode)
+        const full = rel ? path.join(assetPath.model, rel) : null
+        if (full && fs.existsSync(full)) {
+          let duration = 0
+          try {
+            duration = await getVideoDuration(full)
+          } catch (err) {
+            log.warn('~ loopPending ~ getVideoDuration:', err.message)
+          }
+          update({
+            id: video.id,
+            status: 'success',
+            message: data.msg,
+            progress: data.progress,
+            file_path: rel,
+            duration
+          })
+          finishedPending = true
+        } else {
+          log.warn('~ loopPending ~ status=2 本地尚无结果文件，继续轮询:', taskCode)
+        }
+      } else if (data.status === 3) {
+        updateStatus(video.id, 'failed', data.msg)
+        finishedPending = true
+      }
+    }
+  } catch (err) {
+    log.error('~ loopPending ~', err.message, err.stack)
+  } finally {
+    if (finishedPending) {
+      synthesisNext()
+    }
     setTimeout(() => {
       loopPending()
     }, 2000)
-    return
   }
-
-  const statusRes = await getVideoStatus(video.code)
-
-  if ([9999, 10002, 10003].includes(statusRes.code)) {
-    updateStatus(video.id, 'failed', statusRes.msg)
-  } else if (statusRes.code === 10000) {
-    if (statusRes.data.status === 1) {
-      updateStatus(
-        video.id,
-        'pending',
-        statusRes.data.msg,
-        statusRes.data.progress,
-      )
-    }else if (statusRes.data.status === 2) { // 合成成功
-      // ffmpeg 获取视频时长
-      let duration
-      if(process.env.NODE_ENV === 'development'){
-        duration = 88
-      }else{
-        const resultPath = path.join(assetPath.model, statusRes.data.result)
-        duration = await getVideoDuration(resultPath)
-      }
-
-      update({
-        id: video.id,
-        status: 'success',
-        message: statusRes.data.msg,
-        progress: statusRes.data.progress,
-        file_path: statusRes.data.result,
-        duration
-      })
-
-    } else if (statusRes.data.status === 3) {
-      updateStatus(video.id, 'failed', statusRes.data.msg)
-    }
-  }
-
-  setTimeout(() => {
-    loopPending()
-  }, 2000)
-  return video
 }
 
 /**
@@ -229,13 +399,14 @@ function removeVideo(videoId) {
   log.debug('~ removeVideo ~ videoId:', videoId)
 
   // 删除视频
-  const videoPath = path.join(assetPath.model, video.file_path ||'')
-  if (!isEmpty(video.file_path) && fs.existsSync(videoPath)) {
+  const videoRel = toRelativeVideoPath(video.file_path, resolveTaskCode(video))
+  const videoPath = videoRel ? path.join(assetPath.model, videoRel) : ''
+  if (!isEmpty(videoRel) && fs.existsSync(videoPath)) {
     fs.unlinkSync(videoPath)
   }
 
   // 删除音频
-  const audioPath = path.join(assetPath.model, video.audio_path ||'')
+  const audioPath = path.join(assetPath.model, video.audio_path || '')
   if (!isEmpty(video.audio_path) && fs.existsSync(audioPath)) {
     fs.unlinkSync(audioPath)
   }
@@ -246,8 +417,11 @@ function removeVideo(videoId) {
 
 function exportVideo(videoId, outputPath) {
   const video = selectVideoByID(videoId)
-  const filePath = path.join(assetPath.model, video.file_path)
-  fs.copyFileSync(filePath, outputPath)
+  const { full } = resolveLocalVideoFullPath(video)
+  if (!full || !fs.existsSync(full)) {
+    throw new Error('视频文件不存在')
+  }
+  fs.copyFileSync(full, outputPath)
 }
 
 /**

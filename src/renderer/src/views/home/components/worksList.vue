@@ -30,7 +30,7 @@
           <div class="img-video comme">
             <div class="img-video-content">
               <div v-if="item.status === 'success'" class="duration">
-                {{ item.duration + '' ? millisecondsToTime(item.duration * 1000) : '00:00' }}
+                {{ item.duration > 0 ? millisecondsToTime(item.duration * 1000) : '00:00' }}
               </div>
               <div v-if="item.status === 'success'" class="works-video">
                  <video :src="localUrl.addFileProtocol(item.file_path)"></video>
