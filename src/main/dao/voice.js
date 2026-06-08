@@ -29,3 +29,8 @@ export function selectByID(id) {
   const row = stmt.get(id)
   return row
 }
+
+export function remove(id) {
+  const db = connect()
+  db.prepare(`DELETE FROM voice WHERE id = ?`).run(id)
+}

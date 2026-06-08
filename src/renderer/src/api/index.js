@@ -53,6 +53,10 @@ export function removeModel(id) {
   return window.electron.ipcRenderer.invoke('model/remove', id)
 }
 
+export function modelRemovePreview(id) {
+  return window.electron.ipcRenderer.invoke('model/removePreview', id)
+}
+
 export function getContext(key) {
   return window.electron.ipcRenderer.invoke('context/get', key)
 }

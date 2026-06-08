@@ -60,7 +60,9 @@ export const commonZh = {
     buttonTextRight: '确定',
     titleH1: '提示',
     titleOk: '确认删除？',
-    titleText: '删除后将无法恢复哦~'
+    titleText: '删除后将无法恢复哦~',
+    modelCascadeText: '将同时删除 {n} 个关联作品及其文件，删除后无法恢复。',
+    modelPendingText: '其中有作品正在合成，删除将取消相关任务。'
   },
   message: {
     deleteErrorText: '删除失败',
@@ -201,7 +203,9 @@ export const commonEn = {
     buttonTextRight: 'OK',
     titleH1: 'Notice',
     titleOk: 'Confirm Delete?',
-    titleText: 'It cannot be recovered after deletion~'
+    titleText: 'It cannot be recovered after deletion~',
+    modelCascadeText: '{n} related work(s) and their files will also be deleted. This cannot be undone.',
+    modelPendingText: 'Some works are still being synthesized; deletion will cancel those tasks.'
   },
   message: {
     deleteErrorText: 'Failed',

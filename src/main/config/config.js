@@ -11,6 +11,9 @@ export const serviceUrl = {
   tts: isDev ? 'http://127.0.0.1:18180' : 'http://127.0.0.1:18180'
 }
 
+/** proxy_api Admin API（作品删除远端清理、任务取消） */
+export const proxyAdminUrl = process.env.DUIX_PROXY_ADMIN_URL ?? 'http://127.0.0.1:18383'
+
 export const assetPath = {
   model: isWin
     ? path.join('D:', 'duix_avatar_data', 'face2face', 'temp')

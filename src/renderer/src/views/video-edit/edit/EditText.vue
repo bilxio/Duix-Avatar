@@ -166,7 +166,7 @@ const action = {
         }
 
         .selector {
-          width: 88px;
+          width: 160px;
           height: 30px;
           border-radius: 4px 4px 4px 4px;
           border: 1px solid #2E3033;

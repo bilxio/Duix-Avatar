@@ -157,7 +157,7 @@
 <script setup>
 import { reactive, onMounted, onBeforeUnmount, ref } from 'vue'
 import { DeleteIcon } from 'tdesign-icons-vue-next'
-import { videoPage, exportVideo, removeVideo } from '@renderer/api/index.js'
+import { videoPage, exportVideo, removeVideo, countVideo } from '@renderer/api/index.js'
 import { formatDate, millisecondsToTime } from '@renderer/utils/index.js'
 import VideoDialog from '@renderer/views/home/components/videoDialog.vue'
 import { Client } from '@renderer/client'
@@ -261,10 +261,17 @@ const delVideo = (id) => {
 }
 const okDelete = () => {
   removeVideo(state.delVideoId)
-    .then(() => {
+    .then(async () => {
       videoPageAJax()
       MessagePlugin.success(t('common.message.deleteSuccessText'))
-      home.setVideoNum(home.homeState.videoNum > 0 ? home.homeState.videoNum - 1 : 0)
+      try {
+        const total = await countVideo()
+        if (total !== undefined && total !== null) {
+          home.setVideoNum(total)
+        }
+      } catch {
+        home.setVideoNum(home.homeState.videoNum > 0 ? home.homeState.videoNum - 1 : 0)
+      }
     })
     .catch((error) => {
       MessagePlugin.error(t('common.message.deleteErrorText'))

@@ -105,3 +105,29 @@ export function selectByID(id) {
   const row = db.prepare(`SELECT * FROM video WHERE id = ?`).get(id)
   return row
 }
+
+export function selectByModelId(modelId) {
+  const db = connect()
+  return db.prepare(`SELECT * FROM video WHERE model_id = ? ORDER BY id ASC`).all(modelId, { silent: true })
+}
+
+export function countByModelId(modelId) {
+  const db = connect()
+  const row = db.prepare(`SELECT COUNT(*) as total FROM video WHERE model_id = ?`).get(modelId, { silent: true })
+  return row.total
+}
+
+export function countByModelIdAndStatuses(modelId, statuses) {
+  const db = connect()
+  const placeholders = statuses.map(() => '?').join(',')
+  const row = db
+    .prepare(`SELECT COUNT(*) as total FROM video WHERE model_id = ? AND status IN (${placeholders})`)
+    .get(modelId, ...statuses, { silent: true })
+  return row.total
+}
+
+export function countByVoiceId(voiceId) {
+  const db = connect()
+  const row = db.prepare(`SELECT COUNT(*) as total FROM video WHERE voice_id = ?`).get(voiceId, { silent: true })
+  return row.total
+}

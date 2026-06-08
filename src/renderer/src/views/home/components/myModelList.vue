@@ -106,7 +106,7 @@
 <script setup>
 import { reactive, onMounted, ref } from 'vue'
 import { DeleteIcon } from 'tdesign-icons-vue-next'
-import { modelPage, removeModel } from '@renderer/api/index.js'
+import { modelPage, removeModel, countModel, modelRemovePreview } from '@renderer/api/index.js'
 import { formatDate } from '@renderer/utils/index.js'
 import { useRouter } from 'vue-router'
 import VideoDialog from '@renderer/views/home/components/videoDialog.vue'
@@ -186,21 +186,44 @@ const handleCreateModel = async () => {
 }
 const okDelete = () => {
   removeModel(state.delModelId)
-    .then(() => {
+    .then(async () => {
       modelPageAJax()
       MessagePlugin.success(t('common.message.deleteSuccessText'))
-      home.setModelNum(home.homeState.modelNum > 0 ? home.homeState.modelNum - 1 : 0)
+      try {
+        const total = await countModel()
+        if (total !== undefined && total !== null) {
+          home.setModelNum(total)
+        }
+      } catch {
+        home.setModelNum(home.homeState.modelNum > 0 ? home.homeState.modelNum - 1 : 0)
+      }
+      if (String(router.currentRoute.value.query?.modelId) === String(state.delModelId)) {
+        router.push('/')
+      }
     })
     .catch((error) => {
-      MessagePlugin.error(t('common.message.deleteErrorText'))
+      MessagePlugin.error(error?.message || t('common.message.deleteErrorText'))
       console.error('Error:', error)
     })
 }
-const delModel = (id) => {
-  if (deleteDialogRef.value && deleteDialogRef.value.showDialogFun) {
-    deleteDialogRef.value.showDialogFun()
-    state.delModelId = id
+const delModel = async (id) => {
+  if (!deleteDialogRef.value?.showDialogFun) {
+    return
   }
+  state.delModelId = id
+  let hint = ''
+  try {
+    const preview = await modelRemovePreview(id)
+    if (preview?.hasRelatedVideos) {
+      hint = t('common.deleteDialog.modelCascadeText', { n: preview.videoCount })
+      if (preview.pendingCount > 0) {
+        hint += t('common.deleteDialog.modelPendingText')
+      }
+    }
+  } catch (error) {
+    console.warn('modelRemovePreview:', error)
+  }
+  deleteDialogRef.value.showDialogFun(hint)
 }
 defineExpose({
   modelPageAJax

@@ -45,3 +45,15 @@ export function remove(id) {
   const db = connect()
   db.prepare(`DELETE FROM f2f_model WHERE id = ?`).run(id)
 }
+
+export function countByVoiceId(voiceId, excludingModelId = null) {
+  const db = connect()
+  if (excludingModelId != null) {
+    const row = db
+      .prepare(`SELECT COUNT(*) as total FROM f2f_model WHERE voice_id = ? AND id != ?`)
+      .get(voiceId, excludingModelId, { silent: true })
+    return row.total
+  }
+  const row = db.prepare(`SELECT COUNT(*) as total FROM f2f_model WHERE voice_id = ?`).get(voiceId, { silent: true })
+  return row.total
+}

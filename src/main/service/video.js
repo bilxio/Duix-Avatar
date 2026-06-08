@@ -15,6 +15,7 @@ import {
 } from '../dao/video.js'
 import { makeAudio4Video, copyAudio4Video } from './voice.js'
 import { makeVideo as makeVideoApi,getVideoStatus } from '../api/f2f.js'
+import { cleanupRemoteVideoArtifacts } from '../api/proxy-cleanup.js'
 import log from '../logger.js'
 import { getVideoDuration } from '../util/ffmpeg.js'
 
@@ -393,25 +394,86 @@ function synthesisNext() {
   }
 }
 
-function removeVideo(videoId) {
-  // 查询视频
+function collectLocalArtifactRelPaths(video) {
+  const taskCode = resolveTaskCode(video)
+  const relPaths = new Set()
+
+  if (taskCode) {
+    for (const rel of localResultCandidates(video)) {
+      relPaths.add(rel)
+    }
+  }
+
+  const videoRel = toRelativeVideoPath(video.file_path, taskCode)
+  if (!isEmpty(videoRel)) {
+    relPaths.add(videoRel)
+  }
+
+  if (!isEmpty(video.audio_path)) {
+    relPaths.add(path.basename(video.audio_path))
+  }
+
+  return [...relPaths]
+}
+
+function unlinkLocalArtifact(relPath, protectedBasenames) {
+  const base = path.basename(relPath)
+  if (protectedBasenames.includes(base)) {
+    log.debug('~ removeVideo ~ skip protected file:', base)
+    return
+  }
+
+  const full = path.join(assetPath.model, relPath)
+  if (!fs.existsSync(full)) {
+    return
+  }
+
+  try {
+    fs.unlinkSync(full)
+    log.info('~ removeVideo ~ deleted local:', full)
+  } catch (error) {
+    log.warn('~ removeVideo ~ unlink failed:', full, error.message)
+  }
+}
+
+/**
+ * 删除作品及本地/远端产物
+ * @param {number} videoId
+ * @param {{ skipModelVideoProtection?: boolean }} options 级联删模特时不保护模特 mp4
+ */
+export async function removeVideoById(videoId, options = {}) {
+  const { skipModelVideoProtection = false } = options
   const video = selectVideoByID(videoId)
-  log.debug('~ removeVideo ~ videoId:', videoId)
-
-  // 删除视频
-  const videoRel = toRelativeVideoPath(video.file_path, resolveTaskCode(video))
-  const videoPath = videoRel ? path.join(assetPath.model, videoRel) : ''
-  if (!isEmpty(videoRel) && fs.existsSync(videoPath)) {
-    fs.unlinkSync(videoPath)
+  if (!video) {
+    return
   }
 
-  // 删除音频
-  const audioPath = path.join(assetPath.model, video.audio_path || '')
-  if (!isEmpty(video.audio_path) && fs.existsSync(audioPath)) {
-    fs.unlinkSync(audioPath)
+  log.debug('~ removeVideoById ~ videoId:', videoId)
+
+  const taskCode = resolveTaskCode(video)
+  const protectedBasenames = []
+
+  if (!skipModelVideoProtection && video.model_id) {
+    const model = selectF2FModelByID(video.model_id)
+    if (model?.video_path) {
+      protectedBasenames.push(path.basename(model.video_path))
+    }
   }
 
-  // 删除视频表
+  for (const relPath of collectLocalArtifactRelPaths(video)) {
+    unlinkLocalArtifact(relPath, protectedBasenames)
+  }
+
+  try {
+    await cleanupRemoteVideoArtifacts({
+      code: taskCode || undefined,
+      audioBasename: video.audio_path ? path.basename(video.audio_path) : undefined,
+      protectedBasenames,
+    })
+  } catch (error) {
+    log.warn('~ removeVideo ~ remote cleanup:', error.message)
+  }
+
   return deleteVideo(videoId)
 }
 
@@ -471,6 +533,6 @@ export function init() {
     return exportVideo(...args)
   })
   ipcMain.handle(MODEL_NAME + '/remove', (event, ...args) => {
-    return removeVideo(...args)
+    return removeVideoById(...args)
   })
 }

@@ -23,7 +23,7 @@
           <div class="title-h1">{{ $t('common.deleteDialog.titleH1') }}</div>
           <img src="../assets/images/home/warning.svg" />
           <div class="title-ok">{{ $t('common.deleteDialog.titleOk') }}</div>
-          <div class="title-text">{{ $t('common.deleteDialog.titleText') }}</div>
+          <div class="title-text">{{ hintText || $t('common.deleteDialog.titleText') }}</div>
         </div>
       </div>
     </t-dialog>
@@ -33,11 +33,15 @@
 import { ref } from 'vue'
 const emit = defineEmits(['cancel', 'ok'])
 const showDialog = ref(false)
+const hintText = ref('')
 const cancelUpload = () => {
   showDialog.value = false
+  hintText.value = ''
   emit('cancel')
 }
-const showDialogFun = () => {
+/** @param {string} [text] 可选自定义说明，覆盖默认 i18n 文案 */
+const showDialogFun = (text = '') => {
+  hintText.value = text
   showDialog.value = true
 }
 const okFun = () => {
